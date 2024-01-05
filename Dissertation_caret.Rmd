@@ -1,0 +1,1592 @@
+---
+title: "Dissertation_caret"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load file
+```{r}
+rm(list = ls())
+source("classification/sampling.r")
+library(dataQualityR)
+library(readr)
+library('dplyr')
+library(ggplot2)
+library(Hmisc)  #Imputate missing values
+#library("Rcmdr")  #continuous var
+library(moments)  #skewness,kurtosis
+library("plyr")   #categorical var
+library(gridExtra)  #graph
+
+library('AppliedPredictiveModeling')
+library(caret)  #classification & regression training
+library('DMwR') #Compute the accuracy of imputation, but need to install the other packages
+library(stats)  #multiple regression lm() function, lapply function
+library(PerformanceAnalytics) #chart.Correlation (Scatterplot)
+library(C50)
+library(rpart)
+library(rpart.plot)
+library(pROC)   #cross validation
+library(gmodels)  #Evaluate the model
+library(rattle)
+library(RColorBrewer)
+
+nasa <- read.csv("~/Documents/03_Dissertation/NHA_dataset_NASAquestionaire.csv", stringsAsFactors=FALSE)
+wp <- read.csv("~/Documents/03_Dissertation/NHA_dataset_WPquestionaire.csv", stringsAsFactors=FALSE)
+efs <- read.csv("~/Documents/03_Dissertation/NHA_dataset_LUCAquestionaire.csv", stringsAsFactors=FALSE)
+nasa$scale <- "nasa"
+wp$scale <- "wp"
+efs$scale <- "efs"
+
+# Data quality
+nasa_num.file <- paste(tempdir(), "/dq_nasaNum.csv", sep= "")
+nasa_cat.file <- paste(tempdir(), "/dq_nasaCat.csv", sep= "")
+checkDataQuality(data= nasa, out.file.num= nasa_num.file, out.file.cat= nasa_cat.file)
+```
+
+```{r inspection}
+# Inspecting data
+str(nasa)
+head(nasa)
+any(is.na(nasa))
+colSums(is.na(nasa))
+
+str(wp)
+head(wp)
+any(is.na(wp))
+colSums(is.na(wp))
+
+str(efs)
+head(efs)
+any(is.na(efs))
+colSums(is.na(efs))
+
+## Impute values
+impute(nasa$mental_workload, median)
+impute(nasa$temporal, median)
+nasa$mental_workload[is.na(nasa$mental_workload)] <- median(nasa$mental_workload, na.rm = T)
+nasa$temporal[is.na(nasa$temporal)] <- median(nasa$temporal, na.rm = T)
+any(is.na(nasa$mental_workload))
+any(is.na(nasa$temporal))
+
+impute(wp$task_space, median)
+impute(wp$auditory_resources, median)
+wp$task_space[is.na(wp$task_space)] <- median(wp$task_space, na.rm = T)
+wp$auditory_resources[is.na(wp$auditory_resources)] <- median(wp$auditory_resources, na.rm = T)
+any(is.na(wp$task_space))
+any(is.na(wp$auditory_resources))
+
+impute(efs$mental_workload, median)
+impute(efs$temporal_demand, median)
+impute(efs$visual_attention, median)
+impute(efs$effort, median)
+impute(efs$frustration, median)
+impute(efs$verbal_material, median)
+impute(efs$skill, median)
+impute(efs$past_knowledge_expertise, median)
+efs$mental_workload[is.na(efs$mental_workload)] <- median(efs$mental_workload, na.rm = T)
+efs$temporal_demand[is.na(efs$temporal_demand)] <- median(efs$temporal_demand, na.rm = T)
+efs$visual_attention[is.na(efs$visual_attention)] <- median(efs$visual_attention, na.rm = T)
+efs$effort[is.na(efs$effort)] <- median(efs$effort, na.rm = T)
+efs$frustration[is.na(efs$frustration)] <- median(efs$frustration, na.rm = T)
+efs$verbal_material[is.na(efs$verbal_material)] <- median(efs$verbal_material, na.rm = T)
+efs$skill[is.na(efs$skill)] <- median(efs$skill, na.rm = T)
+efs$past_knowledge_expertise[is.na(efs$past_knowledge_expertise)] <- median(efs$past_knowledge_expertise, na.rm = T)
+any(is.na(efs$mental_workload))
+any(is.na(efs$temporal_demand))
+any(is.na(efs$visual_attention))
+any(is.na(efs$effort))
+any(is.na(efs$frustration))
+any(is.na(efs$verbal_material))
+any(is.na(efs$skill))
+any(is.na(efs$past_knowledge_expertise))
+```
+
+```{r transformation}
+# Transforming data
+nasa$con_mental_workload <- nasa$mental_workload*5
+nasa$con_mental <- nasa$mental*5
+nasa$con_physical <- nasa$physical*5
+nasa$con_temporal <- nasa$temporal*5
+nasa$con_performance <- nasa$performance*5
+nasa$con_frustration <- nasa$frustration*5
+nasa$con_effort <- nasa$effort*5
+summary(nasa)
+nasa$mental_workload_recode <- nasa$mental_workload
+nasa$mental_workload_recode[nasa$mental_workload <= 5] <- 1
+nasa$mental_workload_recode[nasa$mental_workload >5 & nasa$mental_workload <=10] <- 2
+nasa$mental_workload_recode[nasa$mental_workload >10 & nasa$mental_workload <=15] <- 3
+nasa$mental_workload_recode[nasa$mental_workload >15] <- 4
+cbind(table(nasa$mental_workload_recode), 100*round(prop.table(table(nasa$mental_workload_recode)),5), deparse.level=2)
+
+nasa$cat_mental <- nasa$mental
+nasa$cat_mental[nasa$mental <=7] <- 1
+nasa$cat_mental[nasa$mental >7 & nasa$mental <=13] <- 2
+nasa$cat_mental[nasa$mental >13] <- 3
+
+nasa$cat_physical <- nasa$physical
+nasa$cat_physical[nasa$physical <=7] <- 1
+nasa$cat_physical[nasa$physical >7 & nasa$physical <=13] <- 2
+nasa$cat_physical[nasa$physical >13] <- 3
+
+nasa$cat_temporal <- nasa$temporal
+nasa$cat_temporal[nasa$temporal <=7] <- 1
+nasa$cat_temporal[nasa$temporal >7 & nasa$temporal <=13] <- 2
+nasa$cat_temporal[nasa$temporal >13] <- 3
+
+nasa$cat_performance <- nasa$performance
+nasa$cat_performance[nasa$performance <=7] <- 1
+nasa$cat_performance[nasa$performance >7 & nasa$performance <=13] <- 2
+nasa$cat_performance[nasa$performance >13] <- 3
+
+nasa$cat_frustration <- nasa$frustration
+nasa$cat_frustration[nasa$frustration <=7] <- 1
+nasa$cat_frustration[nasa$frustration >7 & nasa$frustration <=13] <- 2
+nasa$cat_frustration[nasa$frustration >13] <- 3
+
+nasa$cat_effort <- nasa$effort
+nasa$cat_effort[nasa$effort <=7] <- 1
+nasa$cat_effort[nasa$effort >7 & nasa$effort <=13] <- 2
+nasa$cat_effort[nasa$effort >13] <- 3
+
+nasa$mental_workload_recode[nasa$mental_workload_recode==1] <- "underload"
+nasa$mental_workload_recode[nasa$mental_workload_recode==2] <- "optimal1"
+nasa$mental_workload_recode[nasa$mental_workload_recode==3] <- "optimal2"
+nasa$mental_workload_recode[nasa$mental_workload_recode==4] <- "overload"
+nasa$mental_workload_recode <- as.factor(nasa$mental_workload_recode)
+table(nasa$mental_workload_recode)
+
+nasa$cat_mental[nasa$cat_mental==1] <- "low"
+nasa$cat_mental[nasa$cat_mental==2] <- "moderate"
+nasa$cat_mental[nasa$cat_mental==3] <- "high"
+nasa$cat_mental <- as.factor(nasa$cat_mental)
+
+nasa$cat_physical[nasa$cat_physical==1] <- "low"
+nasa$cat_physical[nasa$cat_physical==2] <- "moderate"
+nasa$cat_physical[nasa$cat_physical==3] <- "high"
+nasa$cat_physical <- as.factor(nasa$cat_physical)
+
+nasa$cat_temporal[nasa$cat_temporal==1] <- "low"
+nasa$cat_temporal[nasa$cat_temporal==2] <- "moderate"
+nasa$cat_temporal[nasa$cat_temporal==3] <- "high"
+nasa$cat_temporal <- as.factor(nasa$cat_temporal)
+
+nasa$cat_performance[nasa$cat_performance==1] <- "low"
+nasa$cat_performance[nasa$cat_performance==2] <- "moderate"
+nasa$cat_performance[nasa$cat_performance==3] <- "high"
+nasa$cat_performance <- as.factor(nasa$cat_performance)
+
+nasa$cat_frustration[nasa$cat_frustration==1] <- "low"
+nasa$cat_frustration[nasa$cat_frustration==2] <- "moderate"
+nasa$cat_frustration[nasa$cat_frustration==3] <- "high"
+nasa$cat_frustration <- as.factor(nasa$cat_frustration)
+
+nasa$cat_effort[nasa$cat_effort==1] <- "low"
+nasa$cat_effort[nasa$cat_effort==2] <- "moderate"
+nasa$cat_effort[nasa$cat_effort==3] <- "high"
+nasa$cat_effort <- as.factor(nasa$cat_effort)
+
+nasa$cat_mental_workload <- nasa$mental_workload
+nasa$cat_mental_workload[nasa$mental_workload <=2] <- "extreme underload"
+nasa$cat_mental_workload[nasa$mental_workload >2 & nasa$mental_workload <=5] <- "underload"
+nasa$cat_mental_workload[nasa$mental_workload >5 & nasa$mental_workload <=10] <- "optimal load 1"
+nasa$cat_mental_workload[nasa$mental_workload >10 & nasa$mental_workload <=15] <- "optimal load 2"
+nasa$cat_mental_workload[nasa$mental_workload >15 & nasa$mental_workload <=18] <- "overload"
+nasa$cat_mental_workload[nasa$mental_workload >18] <- "extreme overload"
+cbind(table(nasa$cat_mental_workload),100*round(prop.table(table(nasa$cat_mental_workload)),5), deparse.level=2)
+
+# nasa$mental_workload_recode1 <- NA
+# nasa$mental_workload_recode1[nasa$cat_mental_workload=='extreme underload'| nasa$cat_mental_workload=='underload'| nasa$cat_mental_workload=='extreme overload'| nasa$cat_mental_workload=='overload'] <- 0
+# nasa$mental_workload_recode1[nasa$cat_mental_workload=='optimal load 1'| nasa$cat_mental_workload=='optimal load 2'] <- 1
+
+wp$con_mental_workload <- wp$mental_workload*5
+wp$con_solving_deciding <- wp$solving_deciding*5
+wp$con_response_selection <- wp$response_selection*5
+wp$con_task_space <- wp$task_space*5
+wp$con_verbal_material <- wp$verbal_material*5
+wp$con_visual_resources <- wp$visual_resources*5
+wp$con_auditory_resources <- wp$auditory_resources*5
+wp$con_manual_response <- wp$manual_response*5
+wp$con_speech_response <- wp$speech_response*5
+summary(wp)
+wp$cat_mental_workload <- wp$mental_workload
+wp$cat_mental_workload[wp$mental_workload <=2] <- "extreme underload"
+wp$cat_mental_workload[wp$mental_workload >2 & wp$mental_workload <=5] <- "underload"
+wp$cat_mental_workload[wp$mental_workload >5 & wp$mental_workload <=10] <- "optimal load 1"
+wp$cat_mental_workload[wp$mental_workload >10 & wp$mental_workload <=15] <- "optimal load 2"
+wp$cat_mental_workload[wp$mental_workload >15 & wp$mental_workload <=18] <- "overload"
+wp$cat_mental_workload[wp$mental_workload >18] <- "extreme overload"
+wp <- transform(wp, cat_mental_workload = as.factor(cat_mental_workload))
+cbind(table(wp$cat_mental_workload),100*round(prop.table(table(wp$cat_mental_workload)),5), deparse.level=2)
+
+wp$mental_workload_recode <- wp$mental_workload
+wp$mental_workload_recode[wp$mental_workload <=5] <- "underload"
+wp$mental_workload_recode[wp$mental_workload >5 & wp$mental_workload <=10] <- "optimal1"
+wp$mental_workload_recode[wp$mental_workload >10 & wp$mental_workload <=15] <- "optimal2"
+wp$mental_workload_recode[wp$mental_workload >15] <- "overload"
+cbind(table(wp$mental_workload_recode),100*round(prop.table(table(wp$mental_workload_recode)),5), deparse.level=2)
+
+wp$cat_solvingDeciding <- wp$solving_deciding
+wp$cat_solvingDeciding[wp$solving_deciding <=7] <- "low"
+wp$cat_solvingDeciding[wp$solving_deciding >7 & wp$solving_deciding <=13] <- "moderate"
+wp$cat_solvingDeciding[wp$solving_deciding >13] <- "high"
+wp$cat_solvingDeciding <- as.factor(wp$cat_solvingDeciding)
+
+wp$cat_responseSelection <- wp$response_selection
+wp$cat_responseSelection[wp$response_selection <=7] <- "low"
+wp$cat_responseSelection[wp$response_selection >7 & wp$response_selection <=13] <- "moderate"
+wp$cat_responseSelection[wp$response_selection >13] <- "high"
+wp$cat_responseSelection <- as.factor(wp$cat_responseSelection)
+
+wp$cat_taskSpace <- wp$task_space
+wp$cat_taskSpace[wp$task_space <=7] <- "low"
+wp$cat_taskSpace[wp$task_space >7 & wp$task_space <=13] <- "moderate"
+wp$cat_taskSpace[wp$task_space >13] <- "high"
+wp$cat_taskSpace <- as.factor(wp$cat_taskSpace)
+
+wp$cat_verbalMaterial <- wp$verbal_material
+wp$cat_verbalMaterial[wp$verbal_material <=7] <- "low"
+wp$cat_verbalMaterial[wp$verbal_material >7 & wp$verbal_material <=13] <- "moderate"
+wp$cat_verbalMaterial[wp$verbal_material >13] <- "high"
+wp$cat_verbalMaterial <- as.factor(wp$cat_verbalMaterial)
+
+wp$cat_visualResources <- wp$visual_resources
+wp$cat_visualResources[wp$visual_resources <=7] <- "low"
+wp$cat_visualResources[wp$visual_resources >7 & wp$visual_resources <=13] <- "moderate"
+wp$cat_visualResources[wp$visual_resources >13] <- "high"
+wp$cat_visualResources <- as.factor(wp$cat_visualResources)
+
+wp$cat_auditoryResources <- wp$auditory_resources
+wp$cat_auditoryResources[wp$auditory_resources <=7] <- "low"
+wp$cat_auditoryResources[wp$auditory_resources >7 & wp$auditory_resources <=13] <- "moderate"
+wp$cat_auditoryResources[wp$auditory_resources >13] <- "high"
+wp$cat_auditoryResources <- as.factor(wp$cat_auditoryResources)
+
+wp$cat_manualResponse <- wp$manual_response
+wp$cat_manualResponse[wp$manual_response <=7] <- "low"
+wp$cat_manualResponse[wp$manual_response >7 & wp$manual_response <=13] <- "moderate"
+wp$cat_manualResponse[wp$manual_response >13] <- "high"
+wp$cat_manualResponse <- as.factor(wp$cat_manualResponse)
+
+wp$cat_speechResponse <- wp$speech_response
+wp$cat_speechResponse[wp$speech_response <=7] <- "low"
+wp$cat_speechResponse[wp$speech_response >7 & wp$speech_response <=13] <- "moderate"
+wp$cat_speechResponse[wp$speech_response >13] <- "high"
+wp$cat_speechResponse <- as.factor(wp$cat_speechResponse)
+
+
+efs$con_mental_workload <- efs$mental_workload*5
+efs$con_mental_demand <- efs$mental_demand*5
+efs$con_parallelism <- efs$parallelism*5
+efs$con_temporal_demand <- efs$temporal_demand*5
+efs$con_manual_Activity <- efs$manual_Activity*5
+efs$con_visual_attention <- efs$visual_attention*5
+efs$con_effort <- efs$effort*5
+efs$con_solving_deciding <- efs$solving_deciding*5
+efs$con_frustration <- efs$frustration*5
+efs$con_context_bias <- efs$context_bias*5
+efs$con_task_space <- efs$task_space*5
+efs$con_motivation <- efs$motivation*5
+efs$con_verbal_material <- efs$verbal_material*5
+efs$con_skill <- efs$skill*5
+efs$con_auditory_attention <- efs$auditory_attention*5
+efs$con_physical_demand <- efs$physical_demand*5
+efs$con_speech_response <- efs$speech_response*5
+efs$con_utility <- efs$utility*5
+efs$con_past_knowledge_expertise <- efs$past_knowledge_expertise*5
+efs$con_arousal <- efs$arousal*5
+efs$con_performance <- efs$performance*5
+summary(efs)
+efs$cat_mental_workload <- efs$mental_workload
+efs$cat_mental_workload[efs$mental_workload <=2] <- "extreme underload"
+efs$cat_mental_workload[efs$mental_workload >2 & efs$mental_workload <=5] <- "underload"
+efs$cat_mental_workload[efs$mental_workload >5 & efs$mental_workload <=10] <- "optimal load 1"
+efs$cat_mental_workload[efs$mental_workload >10 & efs$mental_workload <=15] <- "optimal load 2"
+efs$cat_mental_workload[efs$mental_workload >15 & efs$mental_workload <=18] <- "overload"
+efs$cat_mental_workload[efs$mental_workload >18] <- "extreme overload"
+efs <- transform(efs, cat_mental_workload = as.factor(cat_mental_workload))
+cbind(table(efs$cat_mental_workload),100*round(prop.table(table(efs$cat_mental_workload)),5), deparse.level=2)
+
+efs$mental_workload_recode <- efs$mental_workload
+efs$mental_workload_recode[efs$mental_workload <=5] <- "underload"
+efs$mental_workload_recode[efs$mental_workload >5 & efs$mental_workload <=10] <- "optimal1"
+efs$mental_workload_recode[efs$mental_workload >10 & efs$mental_workload <=15] <- "optimal2"
+efs$mental_workload_recode[efs$mental_workload >15] <- "overload"
+cbind(table(efs$mental_workload_recode),100*round(prop.table(table(efs$mental_workload_recode)),5), deparse.level=2)
+table(efs$mental_workload_recode)
+
+efs$cat_mental <- efs$mental_demand
+efs$cat_mental[efs$mental_demand <=7] <- "low"
+efs$cat_mental[efs$mental_demand >7 & efs$mental_demand <=13] <- "moderate"
+efs$cat_mental[efs$mental_demand >13] <- "high"
+efs$cat_mental <- as.factor(efs$cat_mental)
+
+efs$cat_parallelism <- efs$parallelism
+efs$cat_parallelism[efs$parallelism <=7] <- "low"
+efs$cat_parallelism[efs$parallelism >7 & efs$parallelism <=13] <- "moderate"
+efs$cat_parallelism[efs$parallelism >13] <- "high"
+efs$cat_parallelism <- as.factor(efs$cat_parallelism)
+
+efs$cat_temporal <- efs$temporal_demand
+efs$cat_temporal[efs$temporal_demand <=7] <- "low"
+efs$cat_temporal[efs$temporal_demand >7 & efs$temporal_demand <=13] <- "moderate"
+efs$cat_temporal[efs$temporal_demand >13] <- "high"
+efs$cat_temporal <- as.factor(efs$cat_temporal)
+
+efs$cat_manual <- efs$manual_Activity
+efs$cat_manual[efs$manual_Activity <=7] <- "low"
+efs$cat_manual[efs$manual_Activity >7 & efs$manual_Activity <=13] <- "moderate"
+efs$cat_manual[efs$manual_Activity >13] <- "high"
+efs$cat_manual <- as.factor(efs$cat_manual)
+
+efs$cat_visual <- efs$visual_attention
+efs$cat_visual[efs$visual_attention <=7] <- "low"
+efs$cat_visual[efs$visual_attention >7 & efs$visual_attention <=13] <- "moderate"
+efs$cat_visual[efs$visual_attention >13] <- "high"
+efs$cat_visual <- as.factor(efs$cat_visual)
+
+efs$cat_effort <- efs$effort
+efs$cat_effort[efs$effort <=7] <- "low"
+efs$cat_effort[efs$effort >7 & efs$effort <=13] <- "moderate"
+efs$cat_effort[efs$effort >13] <- "high"
+efs$cat_effort <- as.factor(efs$cat_effort)
+
+efs$cat_solving <- efs$solving_deciding
+efs$cat_solving[efs$solving_deciding <=7] <- "low"
+efs$cat_solving[efs$solving_deciding >7 & efs$solving_deciding <=13] <- "moderate"
+efs$cat_solving[efs$solving_deciding >13] <- "high"
+efs$cat_solving <- as.factor(efs$cat_solving)
+
+efs$cat_frustration <- efs$frustration
+efs$cat_frustration[efs$frustration <=7] <- "low"
+efs$cat_frustration[efs$frustration >7 & efs$frustration <=13] <- "moderate"
+efs$cat_frustration[efs$frustration >13] <- "high"
+efs$cat_frustration <- as.factor(efs$cat_frustration)
+
+efs$cat_context <- efs$context_bias
+efs$cat_context[efs$context_bias <=7] <- "low"
+efs$cat_context[efs$context_bias >7 & efs$context_bias <=13] <- "moderate"
+efs$cat_context[efs$context_bias >13] <- "high"
+efs$cat_context <- as.factor(efs$cat_context)
+
+efs$cat_taskSpace <- efs$task_space
+efs$cat_taskSpace[efs$task_space <=7] <- "low"
+efs$cat_taskSpace[efs$task_space >7 & efs$task_space <=13] <- "moderate"
+efs$cat_taskSpace[efs$task_space >13] <- "high"
+efs$cat_taskSpace <- as.factor(efs$cat_taskSpace)
+
+efs$cat_motivation <- efs$motivation
+efs$cat_motivation[efs$motivation <=7] <- "low"
+efs$cat_motivation[efs$motivation >7 & efs$motivation <=13] <- "moderate"
+efs$cat_motivation[efs$motivation >13] <- "high"
+efs$cat_motivation <- as.factor(efs$cat_motivation)
+
+efs$cat_verbal <- efs$verbal_material
+efs$cat_verbal[efs$verbal_material <=7] <- "low"
+efs$cat_verbal[efs$verbal_material >7 & efs$verbal_material <=13] <- "moderate"
+efs$cat_verbal[efs$verbal_material >13] <- "high"
+efs$cat_verbal <- as.factor(efs$cat_verbal)
+
+efs$cat_skill <- efs$skill
+efs$cat_skill[efs$skill <=7] <- "low"
+efs$cat_skill[efs$skill >7 & efs$skill <=13] <- "moderate"
+efs$cat_skill[efs$skill >13] <- "high"
+efs$cat_skill <- as.factor(efs$cat_skill)
+
+efs$cat_auditory <- efs$auditory_attention
+efs$cat_auditory[efs$auditory_attention <=7] <- "low"
+efs$cat_auditory[efs$auditory_attention >7 & efs$auditory_attention <=13] <- "moderate"
+efs$cat_auditory[efs$auditory_attention >13] <- "high"
+efs$cat_auditory <- as.factor(efs$cat_auditory)
+
+efs$cat_physical <- efs$physical_demand
+efs$cat_physical[efs$physical_demand <=7] <- "low"
+efs$cat_physical[efs$physical_demand >7 & efs$physical_demand <=13] <- "moderate"
+efs$cat_physical[efs$physical_demand >13] <- "high"
+efs$cat_physical <- as.factor(efs$cat_physical)
+
+efs$cat_speech <- efs$speech_response
+efs$cat_speech[efs$speech_response <=7] <- "low"
+efs$cat_speech[efs$speech_response >7 & efs$speech_response <=13] <- "moderate"
+efs$cat_speech[efs$speech_response >13] <- "high"
+efs$cat_speech <- as.factor(efs$cat_speech)
+
+efs$cat_utility <- efs$utility
+efs$cat_utility[efs$utility <=7] <- "low"
+efs$cat_utility[efs$utility >7 & efs$utility <=13] <- "moderate"
+efs$cat_utility[efs$utility >13] <- "high"
+efs$cat_utility <- as.factor(efs$cat_utility)
+
+efs$cat_knowledge <- efs$past_knowledge_expertise
+efs$cat_knowledge[efs$past_knowledge_expertise <=7] <- "low"
+efs$cat_knowledge[efs$past_knowledge_expertise >7 & efs$past_knowledge_expertise <=13] <- "moderate"
+efs$cat_knowledge[efs$past_knowledge_expertise >13] <- "high"
+efs$cat_knowledge <- as.factor(efs$cat_knowledge)
+
+efs$cat_arousal <- efs$arousal
+efs$cat_arousal[efs$arousal <=7] <- "low"
+efs$cat_arousal[efs$arousal >7 & efs$arousal <=13] <- "moderate"
+efs$cat_arousal[efs$arousal >13] <- "high"
+efs$cat_arousal <- as.factor(efs$cat_arousal)
+
+efs$cat_performance <- efs$performance
+efs$cat_performance[efs$performance <=7] <- "low"
+efs$cat_performance[efs$performance >7 & efs$performance <=13] <- "moderate"
+efs$cat_performance[efs$performance >13] <- "high"
+efs$cat_performance <- as.factor(efs$cat_performance)
+
+# efs$cat_mental_workload <- efs$mental_workload
+# efs$cat_mental_workload[efs$mental_workload <=2] <- "extreme underload"
+# efs$cat_mental_workload[efs$mental_workload >2 & efs$mental_workload <=5] <- "underload"
+# efs$cat_mental_workload[efs$mental_workload >5 & efs$mental_workload <=10] <- "optimal load 1"
+# efs$cat_mental_workload[efs$mental_workload >10 & efs$mental_workload <=15] <- "optimal load 2"
+# efs$cat_mental_workload[efs$mental_workload >15 & efs$mental_workload <=18] <- "overload"
+# efs$cat_mental_workload[efs$mental_workload >18] <- "extreme overload"
+# efs <- transform(efs, cat_mental_workload = as.factor(cat_mental_workload))
+# table(efs$cat_mental_workload)
+
+```
+
+```{r regression}
+# Regression
+q1 <- qplot(x = con_mental_workload, data = nasa, colour=I("red"), fill=I("white")) +
+  theme_bw() +
+  theme(
+    plot.background = element_blank()
+    ,panel.grid.major = element_blank()
+    ,panel.grid.minor = element_blank()
+    ,panel.border = element_blank()
+  ) +
+  geom_histogram(binwidth=2, colour="brown", aes(y=..density..,fill=..count..)) +
+  scale_fill_gradient("Count", low="#DCDCDC", high="#4C4C4C")+
+  stat_function(fun=dnorm, color="red",args=list(mean=mean(wp$con_mental_workload,na.rm = T), sd=sd(wp$con_mental_workload,na.rm = T)))+
+  labs(title="NASA-Task Load Index",x="") +
+  theme(axis.line = element_line(color = 'red'))
+q2 <- qplot(x = con_mental_workload, data = wp, colour=I("blue"), fill=I("white")) + 
+  theme_bw() +
+  theme(
+    plot.background = element_blank()
+    ,panel.grid.major = element_blank()
+    ,panel.grid.minor = element_blank()
+    ,panel.border = element_blank()
+  ) +
+  labs(title="Workload profile",x="") +
+  theme(axis.line = element_line(color = 'blue'))
+q3 <- qplot(x = con_mental_workload, data = efs, colour=I("green"), fill=I("white")) + 
+  theme_bw() +
+  theme(
+    plot.background = element_blank()
+    ,panel.grid.major = element_blank()
+    ,panel.grid.minor = element_blank()
+    ,panel.border = element_blank()
+  ) +
+  labs(title="Extended feature sets", x="Mental workload score") +
+  theme(axis.line = element_line(color = 'green'))
+grid.arrange(q1, q2, q3, ncol=1)
+
+gg1 <- ggplot(nasa, aes(x=nasa$con_mental_workload)) +
+  theme_classic() + 
+  labs(title="NASA-Task Load Index", x = "") + 
+  geom_histogram(binwidth=2, colour=I("red"), fill=I("white"), aes(y=..density..,fill=..count..))+ 
+  scale_fill_gradient("Count", low="#DCDCDC", high="#8C8C8C")+ 
+  stat_function(fun=dnorm, color="red",args=list(mean=mean(nasa$con_mental_workload,na.rm = T), sd=sd(nasa$con_mental_workload,na.rm = T)))
+gg2 <- ggplot(wp, aes(x=wp$con_mental_workload)) +
+  theme_classic() + 
+  labs(title="Workload profile", x = "") + 
+  geom_histogram(binwidth=2, colour=I("blue"), fill=I("white"), aes(y=..density..,fill=..count..))+ 
+  scale_fill_gradient("Count", low="#DCDCDC", high="#8C8C8C")+ 
+  stat_function(fun=dnorm, color="blue",args=list(mean=mean(wp$con_mental_workload,na.rm = T), sd=sd(wp$con_mental_workload,na.rm = T)))
+gg3 <- ggplot(efs, aes(x=efs$con_mental_workload)) +
+  theme_classic() + 
+  labs(title="Extended feature sets", x = "Mental workload score") + 
+  geom_histogram(binwidth=2, colour=I("green"), fill=I("white"), aes(y=..density..,fill=..count..))+ 
+  scale_fill_gradient("Count", low="#DCDCDC", high="#8C8C8C")+ 
+  stat_function(fun=dnorm, color="green",args=list(mean=mean(efs$con_mental_workload,na.rm = T), sd=sd(efs$con_mental_workload,na.rm = T)))
+grid.arrange(gg1, gg2, gg3, ncol=1)
+
+qq1 <- qplot(sample=con_mental_workload, data=nasa) + 
+  labs(title="NASA-Task Load Index", y="Score") +
+  theme_classic()
+  # qqline(nasa$con_mental_workload, col=2)
+bp1 <- gg1 + geom_boxplot() +
+  labs(title="NASA-Task Load Index", x="Mental workload levels", y="Score") +
+  theme_classic()
+qq2 <- qplot(sample=con_mental_workload, data=wp) + 
+  labs(title="Workload profile") +
+  theme_classic()
+  # qqline(wp$con_mental_workload, col=2)
+bp2 <- gg2 + geom_boxplot(fill=mental_workload_recode) +
+  labs(title="Workload Profile", x="Mental workload levels", y="Score") +
+  theme_classic()
+qq3 <- qplot(sample=con_mental_workload, data=efs) + 
+  labs(title="Extended feature sets") +
+  theme_classic()
+  # qqline(efs$con_mental_workload, col=2)
+bp3 <- gg3 + geom_boxplot(fill=mental_workload_recode) +
+  labs(title="Extended Feature sets", x="Mental workload levels", y="Score") +
+  theme_classic()
+grid.arrange(qq1, bp1, qq2, bp2, qq3, bp3, ncol=2, nrow=3)
+
+qqnorm(nasa$con_mental_workload)
+qqline(nasa$con_mental_workload, col=2)
+boxplot(nasa$con_mental_workload) + title("NASA-Task Load Index")
+skewness((nasa$con_mental_workload),na.rm = T)
+kurtosis((nasa$con_mental_workload),na.rm = T)
+shapiro.test(nasa$con_mental_workload)
+
+qqnorm(wp$con_mental_workload)
+qqline(wp$con_mental_workload, col=2)
+boxplot(wp$con_mental_workload) + title("Workload Profile")
+skewness((wp$con_mental_workload),na.rm = T)
+kurtosis((wp$con_mental_workload),na.rm = T)
+shapiro.test(wp$con_mental_workload)
+
+qqnorm(efs$con_mental_workload)
+qqline(efs$con_mental_workload, col=2)
+boxplot(efs$con_mental_workload) + title("Extended Feature sets")
+skewness((efs$con_mental_workload),na.rm = T)
+kurtosis((efs$con_mental_workload),na.rm = T)
+shapiro.test(efs$con_mental_workload)
+
+## Randomise the Data 
+nasa <- nasa[sample(1:nrow(nasa)), ]
+nasa_sub <- nasa[,36:49]  # get the same size of 3 datasets (NASA,WP,EFS)
+wp <- wp[sample(1:nrow(wp)), ]
+wp_sub <- wp[,23:40]    
+efs <- efs[sample(1:nrow(efs)), ]
+efs_sub <- efs[,34:75]
+## Data Splitting
+set.seed(1327)
+nasatrainIndex <- data.frame(createDataPartition(nasa_sub$mental_workload_recode, p = .7, 
+                                  list = FALSE, 
+                                  times = 10))
+head(nasatrainIndex)
+# nasaTrain <- data.frame(list())
+# nasaTest <- data.frame(list())
+# for (i in 1:NCOL(nasatrainIndex)){
+#   for (j in i:NROW(nasatrainIndex)){
+#     nasaTrain[[i][j]] <- nasa_sub[nasatrainIndex$i$j,]
+#     nasaTest[[i][j]]  <- nasa_sub[-nasarainIndex$i$j,]
+#   }
+# }   ## i:column(resample); j:row(each resample)
+
+nasaTrain01 <- nasa_sub[nasatrainIndex$Resample01,]
+nasaTest01  <- nasa_sub[-nasatrainIndex$Resample01,]
+
+nasaTrain_gr <- cbind(nasaTrain01$con_mental_workload, nasaTrain02$con_mental_workload, nasaTrain03$con_mental_workload, nasaTrain04$con_mental_workload, nasaTrain05$con_mental_workload, nasaTrain06$con_mental_workload, nasaTrain07$con_mental_workload, nasaTrain08$con_mental_workload, nasaTrain09$con_mental_workload, nasaTrain10$con_mental_workload)
+nasaTrain_gr <- as.data.frame(nasaTrain_gr)
+nasaTrain_gr$id <- c(1:163)
+nasaTrain_gr <- reshape::melt(nasaTrain_gr, id=c("id"))
+ggplot(nasaTrain_gr, aes(value, color = variable)) + geom_density(alpha = 0.2) +
+  labs(title="NASA-TLX train sets", x="Score") +
+  theme_classic()
+ggplot(nasaTrain_gr, aes(x=variable, y=value, color=variable)) + geom_boxplot() +
+  labs(title="Boxplots NASA-TLX train sets", x="Score") +
+  theme_classic()
+
+bartlett.test(nasaTrain_gr$value, nasaTrain_gr$variable)
+nasaTrain_anova <- anova(lm(value ~ variable, data = nasaTrain_gr))
+nasaTrain_anova
+
+nasaTest_gr <- cbind(nasaTest01$con_mental_workload,nasaTest02$con_mental_workload,nasaTest03$con_mental_workload,nasaTest04$con_mental_workload,nasaTest05$con_mental_workload,nasaTest06$con_mental_workload,nasaTest07$con_mental_workload,nasaTest08$con_mental_workload,nasaTest09$con_mental_workload,nasaTest10$con_mental_workload)
+
+set.seed(1327)
+wptrainIndex <- data.frame(createDataPartition(wp_sub$mental_workload_recode, p = .7, 
+                                  list = FALSE, 
+                                  times = 10))
+head(wptrainIndex)
+wpTrain01 <- wp_sub[ wptrainIndex$Resample01,]
+wpTest01  <- wp_sub[-wptrainIndex$Resample01,]
+
+wpTrain_gr <- cbind(wpTrain01$con_mental_workload, wpTrain02$con_mental_workload, wpTrain03$con_mental_workload, wpTrain04$con_mental_workload, wpTrain05$con_mental_workload, wpTrain06$con_mental_workload, wpTrain07$con_mental_workload, wpTrain08$con_mental_workload, wpTrain09$con_mental_workload, wpTrain10$con_mental_workload)
+wpTrain_gr <- as.data.frame(wpTrain_gr)
+wpTrain_gr$id <- c(1:153)
+wpTrain_gr <- reshape::melt(wpTrain_gr, id=c("id"))
+ggplot(wpTrain_gr, aes(value, color = variable)) + geom_density(alpha = 0.2) +
+  labs(title="WP train sets", x="Score") +
+  theme_classic()
+ggplot(wpTrain_gr, aes(x=variable, y=value, color=variable)) + geom_boxplot() +
+  labs(title="Boxplots WP train sets", x="Score") +
+  theme_classic()
+
+bartlett.test(wpTrain_gr$value, wpTrain_gr$variable)
+wpTrain_anova <- anova(lm(value ~ variable, data = wpTrain_gr))
+wpTrain_anova
+
+set.seed(1327)
+efstrainIndex <- data.frame(createDataPartition(efs_sub$mental_workload_recode, p = .7, 
+                                  list = FALSE, 
+                                  times = 10))
+head(efstrainIndex)
+efsTrain01 <- efs_sub[ efstrainIndex$Resample01,]
+efsTest01  <- efs_sub[-efstrainIndex$Resample01,]
+
+efsTrain_gr <- cbind(efsTrain01$con_mental_workload, efsTrain02$con_mental_workload, efsTrain03$con_mental_workload, efsTrain04$con_mental_workload, efsTrain05$con_mental_workload, efsTrain06$con_mental_workload, efsTrain07$con_mental_workload, efsTrain08$con_mental_workload, efsTrain09$con_mental_workload, efsTrain10$con_mental_workload)
+efsTrain_gr <- as.data.frame(efsTrain_gr)
+efsTrain_gr$id <- c(1:167)
+efsTrain_gr <- reshape::melt(efsTrain_gr, id=c("id"))
+ggplot(efsTrain_gr, aes(value, color = variable)) + geom_density(alpha = 0.2) +
+  labs(title="EFS train sets", x="Score") +
+  theme_classic()
+ggplot(efsTrain_gr, aes(x=variable, y=value, color=variable)) + geom_boxplot() +
+  labs(title="Boxplots EFS train sets", x="Score") +
+  theme_classic()
+
+bartlett.test(efsTrain_gr$value, efsTrain_gr$variable)
+efsTrain_anova <- anova(lm(value ~ variable, data = efsTrain_gr))
+efsTrain_anova
+
+## Identify correlated predictors
+nasaCor <- cor(nasa[,36:42])
+nasaCor
+wpCor <- cor(wp[,23:31])
+wpCor
+efsCor <- cor(efs[,34:54])
+efsCor
+
+## Scatter plot matrix
+chart.Correlation(nasa[,36:42], histogram = T, pch = 19)
+chart.Correlation(wp[,23:31], histogram = T, pch = 19)
+chart.Correlation(efs[,c("con_mental_workload","con_mental_demand","con_temporal_demand","con_effort","con_frustration","con_physical_demand","con_performance")], histogram = T, pch = 19)
+chart.Correlation(efs[,c("con_mental_workload","con_manual_Activity","con_visual_attention","con_solving_deciding","con_task_space","con_verbal_material","con_auditory_attention","con_speech_response")], histogram = T, pch = 19)
+chart.Correlation(efs[,c("con_mental_workload","con_parallelism","con_context_bias","con_motivation","con_skill","con_utility","con_past_knowledge_expertise","con_arousal")], histogram = T, pch = 19)
+
+# Multiple Linear Regression
+fitControl1 <- trainControl(## 10-fold CV
+                           method = "repeatedcv", number = 10,
+                           ## repeated ten times
+                           repeats = 10)
+#===========================NASA
+## Training
+nasaTrain <- nasaTrain10[,1:7]
+nasaTest <- nasaTest10[,1:7]
+set.seed(1327)
+nasa_reg <- train(con_mental_workload~., data=nasaTrain, method="lm")
+summary(nasa_reg)
+
+nasa_reg_cv <- train(con_mental_workload~., data=nasaTrain, method="lm", trControl=fitControl1, metric="Rsquared")
+summary(nasa_reg_cv$finalModel)
+nasa_reg_cv$finalModel
+nasa_reg_cv$results
+nasa_resid <- residuals(nasa_reg_cv$finalModel)
+nasa_pred <- predict(nasa_reg_cv$finalModel)
+plot(nasaTrain$con_mental_workload, nasa_resid)
+abline(0,0)
+
+ggplot(nasaTrain, aes(x = con_mental, y = con_mental_workload)) +
+  geom_smooth(method = "lm", se = FALSE, color = "lightgrey") +
+  geom_segment(aes(xend = con_mental, yend = nasa_pred), alpha = .2) +
+  geom_point(aes(color = nasa_resid)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  guides(color = FALSE) +
+  geom_point(aes(y = nasa_pred), shape = 1) +
+  theme_bw()
+ggplot(nasaTrain, aes(x = con_temporal, y = con_mental_workload)) +
+  geom_smooth(method = "lm", se = FALSE, color = "lightgrey") +
+  geom_segment(aes(xend = con_temporal, yend = nasa_pred), alpha = .2) +
+  geom_point(aes(color = nasa_resid)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  guides(color = FALSE) +
+  geom_point(aes(y = nasa_pred), shape = 1) +
+  theme_bw()
+ggplot(nasaTrain, aes(x = con_frustration, y = con_mental_workload)) +
+  geom_smooth(method = "lm", se = FALSE, color = "lightgrey") +
+  geom_segment(aes(xend = con_frustration, yend = nasa_pred), alpha = .2) +
+  geom_point(aes(color = nasa_resid)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  guides(color = FALSE) +
+  geom_point(aes(y = nasa_pred), shape = 1) +
+  theme_bw()
+
+plot(nasaTrain$con_mental_workload, nasa_pred)
+points(nasaTrain$con_mental_workload, nasa_pred, col = "blue")
+
+varImp(nasa_reg_cv)
+plot(varImp(nasa_reg_cv), main="NASA factors")
+
+## Testing
+nasa_predTest <- predict(nasa_reg_cv$finalModel, nasaTest)
+nasa_model <- data.frame(obs=nasaTest$con_mental_workload, pred=nasa_predTest)
+defaultSummary(nasa_model)
+
+axisRange <- extendrange(c(nasaTest$con_mental_workload, nasa_predTest))
+plot(nasaTest$con_mental_workload, nasa_predTest, ylim = axisRange, xlim = axisRange)
+abline(0, 1, col = "darkgrey", lty = 2)
+
+#===========================WP
+## Training
+wpTrain <- wpTrain10[,1:9]
+wpTest <- wpTest10[,1:9]
+
+set.seed(1327)
+wp_reg_cv <- train(con_mental_workload~., data=wpTrain, method="lm", trControl=fitControl1, metric="Rsquared")
+summary(wp_reg_cv$finalModel)
+wp_reg_cv$finalModel
+wp_reg_cv$results
+wp_resid <- residuals(wp_reg_cv$finalModel)
+wp_pred <- predict(wp_reg_cv$finalModel)
+plot(wpTrain$con_mental_workload, wp_resid)
+abline(0,0)
+
+ggplot(wpTrain, aes(x = con_solving_deciding, y = con_mental_workload)) +
+  geom_smooth(method = "lm", se = FALSE, color = "lightgrey") +
+  geom_segment(aes(xend = con_solving_deciding, yend = wp_pred), alpha = .2) +
+  geom_point(aes(color = wp_resid)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  guides(color = FALSE) +
+  geom_point(aes(y = wp_pred), shape = 1) +
+  theme_bw()
+ggplot(wpTrain, aes(x = con_verbal_material, y = con_mental_workload)) +
+  geom_smooth(method = "lm", se = FALSE, color = "lightgrey") +
+  geom_segment(aes(xend = con_verbal_material, yend = wp_pred), alpha = .2) +
+  geom_point(aes(color = wp_resid)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  guides(color = FALSE) +
+  geom_point(aes(y = wp_pred), shape = 1) +
+  theme_bw()
+
+plot(wpTrain$con_mental_workload, wp_pred)
+points(wpTrain$con_mental_workload, wp_pred, col="blue")
+
+varImp(wp_reg_cv)
+plot(varImp(wp_reg_cv), main="WP factors")
+## Testing
+wp_predTest <- predict(wp_reg_cv, wpTest)
+wp_model <- data.frame(obs=wpTest$con_mental_workload, pred=wp_predTest)
+defaultSummary(wp_model)
+
+ #===========================EFS
+## Training
+efsTrain <- efsTrain10[,1:21]
+efsTest <- efsTest10[,1:21]
+
+set.seed(1327)
+efs_reg_cv <- train(con_mental_workload~., data=efsTrain, method="lm", trControl=fitControl1, metric="Rsquared")
+summary(efs_reg_cv$finalModel)
+efs_reg_cv$finalModel
+efs_reg_cv$results
+efs_resid <- residuals(efs_reg_cv$finalModel)
+efs_pred <- predict(efs_reg_cv$finalModel)
+
+plot(efsTrain$con_mental_workload, efs_resid)
+abline(0,0)
+
+ggplot(efsTrain, aes(x = con_mental_demand, y = con_mental_workload)) +
+  geom_smooth(method = "lm", se = FALSE, color = "lightgrey") +
+  geom_segment(aes(xend = con_mental_demand, yend = efs_pred), alpha = .2) +
+  geom_point(aes(color = efs_resid)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  guides(color = FALSE) +
+  geom_point(aes(y = efs_pred), shape = 1) +
+  theme_bw()
+ggplot(efsTrain, aes(x = con_temporal_demand, y = con_mental_workload)) +
+  geom_smooth(method = "lm", se = FALSE, color = "lightgrey") +
+  geom_segment(aes(xend = con_temporal_demand, yend = efs_pred), alpha = .2) +
+  geom_point(aes(color = efs_resid)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  guides(color = FALSE) +
+  geom_point(aes(y = efs_pred), shape = 1) +
+  theme_bw()
+ggplot(efsTrain, aes(x = con_visual_attention, y = con_mental_workload)) +
+  geom_smooth(method = "lm", se = FALSE, color = "lightgrey") +
+  geom_segment(aes(xend = con_visual_attention, yend = efs_pred), alpha = .2) +
+  geom_point(aes(color = efs_resid)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  guides(color = FALSE) +
+  geom_point(aes(y = efs_pred), shape = 1) +
+  theme_bw()
+
+plot(efsTrain$con_mental_workload, efs_pred)
+points(efsTrain$con_mental_workload, efs_pred, col="blue")
+varImp(efs_reg_cv)
+plot(varImp(efs_reg_cv), main="EFS factors")
+## Testing
+efs_predTest <- predict(efs_reg_cv, efsTest)
+efs_model <- data.frame(obs=efsTest$con_mental_workload, pred=efs_predTest)
+defaultSummary(efs_model)
+
+```
+
+```{r classification}
+# Classification
+#================NASA
+## Data Splitting
+## Training by Information Gain (C5.0)
+##* Cross-validation
+nasaTrain <- nasaTrain10[,8:14]
+nasaTest <- nasaTest10[,8:14]
+
+set.seed(1327)
+nasa_dt1 <- train(mental_workload_recode~., data=nasaTrain, method="C5.0", trControl=fitControl1)
+nasa_dt1
+nasa_dt1$finalModel
+plot(nasa_dt1)
+
+nasa_dtGrid <- expand.grid(trials=10, model="tree", winnow=T)
+nrow(nasa_dtGrid)
+set.seed(1327)
+nasa_dt2 <- train(mental_workload_recode~., data=nasaTrain, method="C5.0", trControl=fitControl1, tuneGrid = nasa_dtGrid)
+nasa_dt2$results
+
+fitControl2 <- trainControl(method = "repeatedcv", number = 10, repeats = 10,
+                           classProbs = T, summaryFunction = multiClassSummary)
+set.seed(1327)
+#*NOT RUN* apply UP sampling or SMOTE sampling
+table(nasaTrain$mental_workload_recode)
+set.seed(1327)
+nasa_smoteTrain <- SMOTE(mental_workload_recode ~., data=nasaTrain, perc.under=2700)
+table(nasa_smoteTrain$mental_workload_recode)
+
+set.seed(1327)
+nasa_upTrain <- upSample(x = nasaTrain[,], y = nasaTrain$mental_workload_recode, list = F)
+table(nasa_upTrain$Class)
+
+set.seed(1327)
+nasa_dt3 <- train(mental_workload_recode~., data=nasaTrain, method="C5.0", trControl=fitControl2, tuneGrid = nasa_dtGrid, metric="Accuracy")
+nasa_dt3  #missing values in resampled performance measures, NaN (precision & f1-measure)
+nasa_dt3 <- train(mental_workload_recode~., data=nasa_smoteTrain, method="C5.0", trControl=fitControl2, tuneGrid = nasa_dtGrid, metric="Accuracy")
+nasa_dt3  #missing values in resampled performance measures, NaN (precision & f1-measure)
+nasa_upTrain <- nasa_upTrain[,-8]
+nasa_dt3 <- train(mental_workload_recode~., data=nasa_upTrain, method="C5.0", trControl=fitControl2, tuneGrid = nasa_dtGrid, metric="Accuracy")
+nasa_dt3$finalModel
+nasa_dt3
+confusionMatrix(nasa_dt3)
+
+##* Prediction of test data
+nasaTest$mental_workload_recode <- as.factor(nasaTest$mental_workload_recode)
+nasa_predDTInf <- predict(nasa_dt3, nasaTest[,2:7])
+nasa_predDTInf <- as.factor(nasa_predDTInf)
+confusionMatrix(nasaTest$mental_workload_recode, nasa_predDTInf, mode = "prec_recall")
+
+## Training by Gini index (rpart)
+#* Target variable as numeric value
+nasaTrain <- nasaTrain01[,1:7]
+nasaTest <- nasaTest01[,1:7]
+
+set.seed(1327)
+nasa_regGN1 <- train(con_mental_workload~., data=nasaTrain, method="rpart", trControl=fitControl1)
+nasa_regGN1
+
+nasa_gnGridReg <- expand.grid(cp=0.05185362)
+set.seed(1327)
+nasa_regGN2 <- train(con_mental_workload~., data=nasaTrain, method="rpart", trControl=fitControl1, tuneGrid=nasa_gnGridReg)
+nasa_regGN2
+
+set.seed(1327)
+nasa_regGN3 <- train(con_mental_workload~., data=nasaTrain, method="rpart", trControl=fitControl1, tuneGrid=nasa_gnGridReg, metric="RMSE")
+nasa_regGN3
+
+##* Prediction of test data
+nasa_predGNreg <- predict(nasa_regGN3, nasaTest)
+nasa_GNreg <- data.frame(obs=nasaTest$con_mental_workload, pred=nasa_predGNreg)
+defaultSummary(nasa_GNreg)
+
+nasa_regGN1 <- rpart::rpart(log(con_mental_workload) ~., data=nasaTrain, method="anova")
+fancyRpartPlot(nasa_regGN1)
+# summary(nasa_GN1)
+# print(nasa_GN1)
+# par(mfrow=c(1,2))
+# plot(nasa_GN1, branch=.4, uniform=T, compress=T, main="Regression Tree")
+# text(nasa_GN1, all=T, use.n=T)
+printcp(nasa_regGN1)
+plotcp(nasa_regGN1)
+
+# length(nasa_pred1)
+# class(nasa_pred1)
+# nasa_pred1 = as.data.frame(nasa_pred1)
+# nasaTest_org = as.data.frame(log(nasaTest$con_mental_workload))
+# nasa_error1 = sum(abs(nasa_pred1-nasaTest_org))/dim(nasaTest)[1]
+# ##* prune the tree
+# nasa_GN1_prn = rpart::prune(nasa_GN1, cp=0.04156853)
+# nasa_pred1_prn <- predict(nasa_GN1_prn, nasaTest[,2:7])
+# length(nasa_pred1_prn)
+# class(nasa_pred1_prn)
+# nasa_pred1_prn = as.data.frame(nasa_pred1_prn)
+# nasa_error_prn1 = sum(abs(nasa_pred1_prn-nasaTest_org))/dim(nasaTest)[1] #dim(data)[1]:the number of rows in data
+# ##* plot pruned tree and original one
+# par(mfrow=c(1,2))
+# plot(nasa_GN1, uniform=T, main="Regression Tree")
+# text(nasa_GN1, all=T, use.n=T)
+# plot(nasa_GN1_prn, uniform=T, main="Regression Pruned Tree")
+# text(nasa_GN1_prn, all=T, use.n=T)
+
+#* Target variable as categorical value
+nasaTrain <- nasaTrain01[,8:14]
+nasaTest <- nasaTest01[,8:14]
+
+set.seed(1327)
+nasa_catGN1 <- train(mental_workload_recode~., data=nasaTrain, method="rpart", trControl=fitControl1)
+nasa_catGN1
+
+nasa_gnGridCat <- expand.grid(cp=0.0)
+set.seed(1327)
+nasa_catGN2 <- train(mental_workload_recode~., data=nasaTrain, method="rpart", trControl=fitControl1, tuneGrid=nasa_gnGridCat)
+nasa_catGN2
+
+set.seed(1327)
+nasa_upTrain <- upSample(x = nasaTrain[,], y = nasaTrain$mental_workload_recode, list = F)
+table(nasa_upTrain$Class)
+
+set.seed(1327)
+nasa_catGN3 <- train(mental_workload_recode~., data=nasaTrain, method="rpart", trControl=fitControl2, tuneGrid=nasa_gnGridCat, metric="Accuracy")
+nasa_catGN3
+nasa_upTrain <- nasa_upTrain[,-8]
+nasa_catGN3 <- train(mental_workload_recode~., data=nasa_upTrain, method="rpart", trControl=fitControl2, tuneGrid=nasa_gnGridCat, metric="Accuracy")
+nasa_catGN3
+confusionMatrix(nasa_catGN3)
+
+##* Prediction of test data
+nasa_predGNcat <- predict(nasa_catGN3, nasaTest[,2:7])
+nasa_GNcat <- postResample(nasa_predGNcat, nasaTest$mental_workload_recode)
+confusionMatrix(data = nasa_predGNcat, reference = nasaTest$mental_workload_recode, mode = "prec_recall")
+
+nasa_GN2 <- rpart::rpart(mental_workload_recode ~., data=nasaTrain, method="class",
+                         control=rpart::rpart.control(minsplit=3))
+fancyRpartPlot(nasa_GN2)
+# summary(nasa_GN2)
+# print(nasa_GN2)
+# par(mfrow=c(1,2))
+# plot(nasa_GN2, uniform=T, compress=T)
+# text(nasa_GN2, all=T, use.n=T, cex=0.6)
+printcp(nasa_GN2)
+plotcp(nasa_GN2)
+
+##* Prediction of test data
+# nasa_pred2 <- predict(nasa_GN2, nasaTest[,2:7])
+# length(nasa_pred2)
+# class(nasa_pred2)
+# nasa_pred2 = as.data.frame(nasa_pred2)
+# nasa_pred2$predValue <- max.col(nasa_pred2)
+# nasa_tb <- table(nasa_pred2$predValue,nasaTest$mental_workload_recode)
+# nasa_error2 = 1-sum(diag(nasa_tb))/sum(nasa_tb)  #misclassification error with "test"
+# CrossTable(nasaTest$mental_workload_recode, nasa_pred2$predValue,
+#            prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE,
+#            dnn = c('actual default', 'predicted default'))
+
+##* prune the tree
+# nasa_GN2_prn = rpart::prune(nasa_GN2, cp=0.02985075)
+# nasa_pred2_prn <- predict(nasa_GN2_prn, nasaTest[,2:7])
+# length(nasa_pred2_prn)
+# class(nasa_pred2_prn)
+# nasa_pred2_prn = as.data.frame(nasa_pred2_prn)
+# nasa_pred2_prn$predValue <- max.col(nasa_pred2_prn)
+# nasa_tb_prn <- table(nasa_pred2_prn$predValue,nasaTest$mental_workload_recode)
+# nasa_error_prn2 = 1-sum(diag(nasa_tb_prn))/sum(nasa_tb_prn)
+# CrossTable(nasaTest$mental_workload_recode, nasa_pred2_prn$predValue,
+#            prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE,
+#            dnn = c('actual default', 'predicted default'))
+
+##* plot pruned tree and original one
+par(mfrow=c(1,2))
+plot(nasa_GN2, uniform=T, compress=T, main="Classification Tree")
+text(nasa_GN2, all=T, use.n=T, cex=0.6)
+plot(nasa_GN2_prn, uniform=T, main="Classification Pruned Tree")
+text(nasa_GN2_prn, all=T, use.n=T)
+
+#================WP
+## Data Splitting
+## Training by Info Gain
+wpTrain <- wpTrain01[,10:18]
+wpTest <- wpTest01[,10:18]
+wpTrain$mental_workload_recode <- as.factor(wpTrain$mental_workload_recode)
+table(wpTrain$mental_workload_recode)
+
+set.seed(1327)
+wp_dt1 <- train(mental_workload_recode~., data=wpTrain, method="C5.0", trControl=fitControl1)
+wp_dt1
+
+wp_dtGrid <- expand.grid(trials=10, model="rules", winnow=T)
+nrow(wp_dtGrid)
+set.seed(1327)
+wp_dt2 <- train(mental_workload_recode~., data=wpTrain, method="C5.0", trControl=fitControl1, tuneGrid = wp_dtGrid)
+wp_dt2
+
+set.seed(1327)
+wp_upTrain <- upSample(x = wpTrain[,], y = wpTrain$mental_workload_recode, list = F)
+table(wp_upTrain$Class)
+
+set.seed(1327)
+wp_dt3 <- train(mental_workload_recode~., data=wpTrain, method="C5.0", trControl=fitControl2, tuneGrid = wp_dtGrid, metric="Accuracy")
+wp_dt3  #missing values in resampled performance measures, NaN (precision & f1-measure)
+wp_upTrain <- wp_upTrain[,-10]
+wp_dt3 <- train(mental_workload_recode~., data=wp_upTrain, method="C5.0", trControl=fitControl2, tuneGrid = wp_dtGrid, metric="Accuracy")
+wp_dt3
+confusionMatrix(wp_dt3)
+
+##* Prediction of test data
+wpTest$mental_workload_recode <- as.factor(wpTest$mental_workload_recode)
+wp_predDTInf <- predict(wp_dt3, wpTest[,2:9])
+confusionMatrix(wpTest$mental_workload_recode, wp_predDTInf, mode = "prec_recall")
+
+## Training by Gini index (rpart)
+#* Target variable as numeric value
+wpTrain <- wpTrain01[,1:9]
+wpTest <- wpTest01[,1:9]
+
+set.seed(1327)
+wp_regGN1 <- train(con_mental_workload~., data=wpTrain, method="rpart", trControl=fitControl1)
+wp_regGN1
+
+wp_gnGridReg <- expand.grid(cp=0.04233486)
+set.seed(1327)
+wp_regGN2 <- train(con_mental_workload~., data=wpTrain, method="rpart", trControl=fitControl1, tuneGrid=wp_gnGridReg)
+wp_regGN2
+
+set.seed(1327)
+wp_regGN3 <- train(con_mental_workload~., data=wpTrain, method="rpart", trControl=fitControl1, tuneGrid=wp_gnGridReg, metric="RMSE")
+wp_regGN3
+
+##* Prediction of test data
+wp_predGNreg <- predict(wp_regGN3, wpTest)
+wp_GNreg <- data.frame(obs=wpTest$con_mental_workload, pred=wp_predGNreg)
+defaultSummary(wp_GNreg)
+
+wp_regGN1 <- rpart::rpart(log(con_mental_workload) ~., data=wpTrain, method="anova")
+fancyRpartPlot(wp_regGN1)
+printcp(wp_regGN1)   #(alternative) rpart::rsq.rpart(wp_GN1)
+plotcp(wp_regGN1)
+# summary(wp_GN1)
+# print(wp_GN1)
+##* cross-validation
+par(mfrow=c(1,2))
+plot(wp_regGN1, branch=.4, uniform=T, compress=T, main="Regression Tree")
+text(wp_regGN1, all=T, use.n=T)
+
+#* Target variable as categorical value
+wpTrain <- wpTrain01[,10:18]
+wpTest <- wpTest01[,10:18]
+wpTrain$mental_workload_recode <- as.factor(wpTrain$mental_workload_recode)
+wpTest$mental_workload_recode <- as.factor(wpTest$mental_workload_recode)
+
+set.seed(1327)
+wp_catGN1 <- train(mental_workload_recode~., data=wpTrain, method="rpart", trControl=fitControl1)
+wp_catGN1
+
+wp_gnGridCat <- expand.grid(cp=0.01162791)
+set.seed(1327)
+wp_catGN2 <- train(mental_workload_recode~., data=wpTrain, method="rpart", trControl=fitControl1, tuneGrid=wp_gnGridCat)
+wp_catGN2
+
+set.seed(1327)
+wp_upTrain <- upSample(x = wpTrain[,], y = wpTrain$mental_workload_recode, list = F)
+table(wp_upTrain$Class)
+
+set.seed(1327)
+wp_catGN3 <- train(mental_workload_recode~., data=wpTrain, method="rpart", trControl=fitControl2, tuneGrid=wp_gnGridCat, metric="Accuracy")
+wp_catGN3
+wp_upTrain <- wp_upTrain[,-10]
+wp_catGN3 <- train(mental_workload_recode~., data=wp_upTrain, method="rpart", trControl=fitControl2, tuneGrid=wp_gnGridCat, metric="Accuracy")
+wp_catGN3
+confusionMatrix(wp_catGN3)
+
+##* Prediction of test data
+wp_predGNcat <- predict(wp_catGN3, wpTest[,2:9])
+wp_GNcat <- postResample(wp_predGNcat, wpTest$mental_workload_recode)
+confusionMatrix(data = wp_predGNcat, reference = wpTest$mental_workload_recode, mode = "prec_recall")
+
+wpTrain$mental_workload_recode <- as.factor(wpTrain$mental_workload_recode)
+wp_GN2 <- rpart::rpart(mental_workload_recode ~., data=wpTrain, method="class",
+                         control=rpart::rpart.control(minsplit=3))
+##* cross-validation
+par(mfrow=c(1,2))
+plot(wp_GN2, uniform=T, compress=T)
+text(wp_GN2, all=T, use.n=T, cex=0.6)
+printcp(wp_GN2)   #rpart::rsq.rpart(wp_GN2)
+plotcp(wp_GN2)
+
+## Prediction of test data
+# wp_pred1 <- predict(wp_GN1, wpTest[,2:9])
+# length(wp_pred1)
+# class(wp_pred1)
+# wp_pred1 = as.data.frame(wp_pred1)
+# wpTest_org = as.data.frame(log(wpTest$con_mental_workload))
+# wp_error1 = sum(abs(wp_pred1-wpTest_org))/dim(wpTest)[1]
+##* prune the tree
+# wp_GN1_prn = rpart::prune(wp_GN1, cp=0.03)
+# wp_pred1_prn <- predict(wp_GN1_prn, wpTest[,2:9])
+# length(wp_pred1_prn)
+# class(wp_pred1_prn)
+# wp_pred1_prn = as.data.frame(wp_pred1_prn)
+# wp_error_prn1 = sum(abs(wp_pred1_prn-wpTest_org))/dim(wpTest)[1] #dim(data)[1]:the number of rows in data
+##* plot pruned tree and original one
+# par(mfrow=c(1,2))
+# plot(wp_GN1, uniform=T, main="Regression Tree")
+# text(wp_GN1, all=T, use.n=T)
+# plot(wp_GN1_prn, uniform=T, main="Regression Pruned Tree")
+# text(wp_GN1_prn, all=T, use.n=T)
+# 
+# wp_pred2 <- predict(wp_GN2, wpTest[,2:9])
+# length(wp_pred2)
+# class(wp_pred2)
+# wp_pred2 = as.data.frame(wp_pred2)
+# wp_pred2$predValue <- max.col(wp_pred2)
+# wp_tb <- table(wp_pred2$predValue,wpTest$mental_workload_recode)
+# wp_error2 = 1-sum(diag(wp_tb))/sum(wp_tb)  #misclassification error with "test"
+# CrossTable(wpTest$mental_workload_recode, wp_pred2$predValue,
+#            prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE,
+#            dnn = c('actual default', 'predicted default'))
+
+##* prune the tree
+# wp_GN2_prn = rpart::prune(wp_GN2, cp=0.015)
+# wp_pred2_prn <- predict(wp_GN2_prn, wpTest[,2:9])
+# length(wp_pred2_prn)
+# class(wp_pred2_prn)
+# wp_pred2_prn = as.data.frame(wp_pred2_prn)
+# wp_pred2_prn$predValue <- max.col(wp_pred2_prn)
+# wp_tb_prn <- table(wp_pred2_prn$predValue,wpTest$mental_workload_recode)
+# wp_error_prn2 = 1-sum(diag(wp_tb_prn))/sum(wp_tb_prn)
+# 
+# wp_pred2_prn$predValue <- as.factor(wp_pred2_prn$predValue)
+# CrossTable(wpTest$mental_workload_recode, wp_pred2_prn$predValue,
+#            prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE,
+#            dnn = c('actual default', 'predicted default'))
+
+##* plot pruned tree and original one
+par(mfrow=c(1,2))
+plot(wp_GN2, uniform=T, main="Classification Tree")
+text(wp_GN2, all=T, use.n=T)
+plot(wp_GN2_prn, uniform=T, main="Classification Pruned Tree")
+text(wp_GN2_prn, all=T, use.n=T)
+
+#================efs
+## Data Splitting
+efsTrain <- efsTrain01
+efsTest <- efsTest01
+efsTrain$mental_workload_recode <- as.factor(efsTrain$mental_workload_recode)
+table(efsTrain$mental_workload_recode)
+
+## Training by Info Gain
+efsTrain <- efsTrain01[,22:42]
+efsTest <- efsTest01[,22:42]
+efsTrain$mental_workload_recode <- as.factor(efsTrain$mental_workload_recode)
+table(efsTrain$mental_workload_recode)
+
+set.seed(1327)
+efs_dt1 <- train(mental_workload_recode~., data=efsTrain, method="C5.0", trControl=fitControl1)
+efs_dt1
+
+efs_dtGrid <- expand.grid(trials=20, model="rules", winnow=T)
+nrow(efs_dtGrid)
+set.seed(1327)
+efs_dt2 <- train(mental_workload_recode~., data=efsTrain, method="C5.0", trControl=fitControl1, tuneGrid = efs_dtGrid)
+efs_dt2
+
+set.seed(1327)
+efs_upTrain <- upSample(x = efsTrain[,], y = efsTrain$mental_workload_recode, list = F)
+table(efs_upTrain$Class)
+
+set.seed(1327)
+efs_dt3 <- train(mental_workload_recode~., data=efsTrain, method="C5.0", trControl=fitControl2, tuneGrid = efs_dtGrid, metric="Accuracy")
+efs_dt3  #missing values in resampled performance measures, NaN (precision & f1-measure)
+efs_upTrain <- efs_upTrain[,-22]
+efs_dt3 <- train(mental_workload_recode~., data=efs_upTrain, method="C5.0", trControl=fitControl2, tuneGrid = efs_dtGrid, metric="Accuracy")
+efs_dt3
+confusionMatrix(efs_dt3)
+
+##* Prediction of test data
+efsTest$mental_workload_recode <- as.factor(efsTest$mental_workload_recode)
+efs_predDTInf <- predict(efs_dt3, efsTest[,2:21])
+confusionMatrix(efsTest$mental_workload_recode, efs_predDTInf, mode = "prec_recall")
+
+## Training by Gini index (rpart)
+#* Target variable as numeric value
+efsTrain <- efsTrain01[,1:21]
+efsTest <- efsTest01[,1:21]
+
+set.seed(1327)
+efs_regGN1 <- train(con_mental_workload~., data=efsTrain, method="rpart", trControl=fitControl1)
+efs_regGN1
+
+efs_gnGridReg <- expand.grid(cp=0.0719991)
+set.seed(1327)
+efs_regGN2 <- train(con_mental_workload~., data=efsTrain, method="rpart", trControl=fitControl1, tuneGrid=efs_gnGridReg)
+efs_regGN2
+
+set.seed(1327)
+efs_regGN3 <- train(con_mental_workload~., data=efsTrain, method="rpart", trControl=fitControl1, tuneGrid=efs_gnGridReg, metric="RMSE")
+efs_regGN3
+
+##* Prediction of test data
+efs_predGNreg <- predict(efs_regGN3, efsTest)
+efs_GNreg <- data.frame(obs=efsTest$con_mental_workload, pred=efs_predGNreg)
+defaultSummary(efs_GNreg)
+
+efs_GN1 <- rpart::rpart(log(con_mental_workload) ~., data=efsTrain, method="anova")
+summary(efs_GN1)
+print(efs_GN1)
+##* cross-validation
+par(mfrow=c(1,2))
+plot(efs_GN1, branch=.4, uniform=T, compress=T, main="Regression Tree")
+text(efs_GN1, all=T, use.n=T)
+printcp(efs_GN1)  #rpart::rsq.rpart(efs_GN1)
+plotcp(efs_GN1)
+
+#* Target variable as categorical value
+efsTrain <- efsTrain01[,22:42]
+efsTest <- efsTest01[,22:42]
+efsTrain$mental_workload_recode <- as.factor(efsTrain$mental_workload_recode)
+efsTest$mental_workload_recode <- as.factor(efsTest$mental_workload_recode)
+
+set.seed(1327)
+efs_catGN1 <- train(mental_workload_recode~., data=efsTrain, method="rpart", trControl=fitControl1)
+efs_catGN1
+
+efs_gnGridCat <- expand.grid(cp=0.05434783)
+set.seed(1327)
+efs_catGN2 <- train(mental_workload_recode~., data=efsTrain, method="rpart", trControl=fitControl1, tuneGrid=efs_gnGridCat)
+efs_catGN2
+
+set.seed(1327)
+efs_upTrain <- upSample(x = efsTrain[,], y = efsTrain$mental_workload_recode, list = F)
+table(efs_upTrain$Class)
+
+set.seed(1327)
+efs_catGN3 <- train(mental_workload_recode~., data=efsTrain, method="rpart", trControl=fitControl2, tuneGrid=efs_gnGridCat, metric="Accuracy")
+efs_catGN3
+efs_upTrain <- efs_upTrain[,-22]
+efs_catGN3 <- train(mental_workload_recode~., data=efs_upTrain, method="rpart", trControl=fitControl2, tuneGrid=efs_gnGridCat, metric="Accuracy")
+efs_catGN3
+confusionMatrix(efs_catGN3)
+
+##* Prediction of test data
+efs_predGNcat <- predict(efs_catGN3, efsTest[,2:21])
+efs_GNcat <- postResample(efs_predGNcat, efsTest$mental_workload_recode)
+confusionMatrix(data = efs_predGNcat, reference = efsTest$mental_workload_recode, mode = "prec_recall")
+
+efs_GN2 <- rpart::rpart(mental_workload_recode ~., data=efsTrain, method="class",
+                         control=rpart::rpart.control(minsplit=3))
+summary(efs_GN2)
+print(efs_GN2)
+##* cross-validation
+par(mfrow=c(1,2))
+plot(efs_GN2, uniform=T, compress=T)
+text(efs_GN2, all=T, use.n=T, cex=0.6)
+printcp(efs_GN2)  #rpart::rsq.rpart(efs_GN2)
+plotcp(efs_GN2)
+
+## Prediction of test data
+# efs_pred1 <- predict(efs_GN1, efsTest[,2:21])
+# length(efs_pred1)
+# class(efs_pred1)
+# efs_pred1 = as.data.frame(efs_pred1)
+# efsTest_org = as.data.frame(log(efsTest$con_mental_workload))
+# efs_error1 = sum(abs(efs_pred1-efsTest_org))/dim(efsTest)[1]
+##* prune the tree
+# efs_GN1_prn = rpart::prune(efs_GN1, cp=0.018)
+# efs_pred1_prn <- predict(efs_GN1_prn, efsTest[,2:21])
+# length(efs_pred1_prn)
+# class(efs_pred1_prn)
+# efs_pred1_prn = as.data.frame(efs_pred1_prn)
+# efs_error_prn1 = sum(abs(efs_pred1_prn-efsTest_org))/dim(efsTest)[1] #dim(data)[1]:the number of rows in data
+##* plot pruned tree and original one
+par(mfrow=c(1,2))
+plot(efs_GN1, uniform=T, main="Regression Tree")
+text(efs_GN1, all=T, use.n=T)
+plot(efs_GN1_prn, uniform=T, main="Regression Pruned Tree")
+text(efs_GN1_prn, all=T, use.n=T)
+
+# efs_pred2 <- predict(efs_GN2, efsTest[,2:21])
+# length(efs_pred2)
+# class(efs_pred2)
+# efs_pred2 = as.data.frame(efs_pred2)
+# efs_pred2$predValue <- max.col(efs_pred2)
+# efs_tb <- table(efs_pred2$predValue,efsTest$mental_workload_recode)
+# efs_error2 = 1-sum(diag(efs_tb))/sum(efs_tb)  #misclassification error with "test"
+# CrossTable(efsTest$mental_workload_recode, efs_pred2$predValue,
+#            prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE,
+#            dnn = c('actual default', 'predicted default'))
+
+##* prune the tree
+# efs_GN2_prn = rpart::prune(efs_GN2, cp=0.02)
+# efs_pred2_prn <- predict(efs_GN2_prn, efsTest[,2:21])
+# length(efs_pred2_prn)
+# class(efs_pred2_prn)
+# efs_pred2_prn = as.data.frame(efs_pred2_prn)
+# efs_pred2_prn$predValue <- max.col(efs_pred2_prn)
+# efs_tb_prn <- table(efs_pred2_prn$predValue,efsTest$mental_workload_recode)
+# efs_error_prn2 = 1-sum(diag(efs_tb_prn))/sum(efs_tb_prn)
+# CrossTable(efsTest$mental_workload_recode, efs_pred2_prn$predValue,
+#            prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE,
+#            dnn = c('actual default', 'predicted default'))
+
+##* plot pruned tree and original one
+par(mfrow=c(1,2))
+plot(efs_GN2, uniform=T, main="Classification Tree")
+text(efs_GN2, all=T, use.n=T)
+plot(efs_GN2_prn, uniform=T, main="Classification Pruned Tree")
+text(efs_GN2_prn, all=T, use.n=T)
+
+### Comparing resampling distributions
+# *within models
+trellis.par.set(caretTheme())
+densityplot(wp_dt3, pch = "|")
+
+# *between models
+## collect resamples
+resamps1 <- resamples(list(NASA_LR=nasa_reg_cv, NASA_GNReg=nasa_regGN3,
+                          WP_LR=wp_reg_cv, WP_GNReg=wp_regGN3,
+                          EFS_LR=efs_reg_cv, EFS_GNReg=efs_regGN3))
+resamps1
+resamps2 <- resamples(list(NASA_Inf=nasa_dt3, NASA_GNCla=nasa_catGN3,
+                          WP_Inf=wp_dt3, WP_GNCla=wp_catGN3,
+                          EFS_Inf=efs_dt3, EFS_GNCla=efs_catGN3))
+resamps2
+## summarize the distributions
+summary(resamps1)
+summary(resamps2)
+## boxplots of results
+bwplot(resamps1, metric = c("RMSE","Rsquared"))
+bwplot(resamps2, metric = c("Accuracy","Mean_Precision","Mean_Recall"))
+## dotplots of results
+dotplot(resamps1, metric = c("RMSE","Rsquared"))
+dotplot(resamps2, metric = c("Accuracy","Mean_Precision","Mean_Recall"))
+
+densityplot(resamps1, metric="RMSE", auto.key=list(columns=3))
+densityplot(resamps1, metric="Rsquared", auto.key=list(columns=3))
+densityplot(resamps2, metric = c("Accuracy","Mean_Precision","Mean_Recall"), auto.key=list(columns=3))
+
+set.seed(1327)
+nasaTest <- nasaTest01
+nasa_num <- cbind(nasa_predTest, nasa_predGNreg, nasaTest$con_mental_workload)
+friedman.test(nasa_num)
+
+nasa_cat1 <- cbind(nasa_predDTInf, nasaTest$mental_workload_recode)
+nasa_cat1 <- as.data.frame(nasa_cat1)
+CrossTable(nasa_cat1$nasa_predDTInf, nasa_cat1$V2, fisher=T, chisq=T, expected=T, sresid=T, format="SPSS")
+
+nasa_cat2 <- cbind(nasa_predGNcat, nasaTest$mental_workload_recode)
+nasa_cat2 <- as.data.frame(nasa_cat2)
+CrossTable(nasa_cat2$nasa_predGNcat, nasa_cat2$V2, fisher=T, chisq=T, expected=T, sresid=T, format="SPSS")
+
+set.seed(1327)
+wpTest <- wpTest01
+wp_num <- cbind(wp_predTest, wp_predGNreg, wpTest$con_mental_workload)
+friedman.test(wp_num)
+
+wp_cat1 <- cbind(wp_predDTInf, wpTest$mental_workload_recode)
+wp_cat1 <- as.data.frame(wp_cat1)
+CrossTable(wp_cat1$wp_predDTInf, wp_cat1$V2, fisher=T, chisq=T, expected=T, sresid=T, format="SPSS")
+
+wp_cat2 <- cbind(wp_predGNcat, wpTest$mental_workload_recode)
+wp_cat2 <- as.data.frame(wp_cat2)
+CrossTable(wp_cat2$wp_predGNcat, wp_cat2$V2, fisher=T, chisq=T, expected=T, sresid=T, format="SPSS")
+
+set.seed(1327)
+efsTest <- efsTest01
+efs_num <- cbind(efs_predTest, efs_predGNreg, efsTest$con_mental_workload)
+friedman.test(efs_num)
+
+efs_cat1 <- cbind(efs_predDTInf, efsTest$mental_workload_recode)
+efs_cat1 <- as.data.frame(efs_cat1)
+CrossTable(efs_cat1$efs_predDTInf, efs_cat1$V2, fisher=T, chisq=T, expected=T, sresid=T, format="SPSS")
+
+efs_cat2 <- cbind(efs_predGNcat, efsTest$mental_workload_recode)
+efs_cat2 <- as.data.frame(efs_cat2)
+CrossTable(efs_cat2$efs_predGNcat, efs_cat2$V2, fisher=T, chisq=T, expected=T, sresid=T, format="SPSS")
+
+mwl_num_rmse <- NULL
+mwl_num_rmse$nasaLR <- rbind(13.28,12.14,12.66,13.24,13.22,11.87,11.69,11.44,11.62,14.35)
+mwl_num_rmse$wpLR <- rbind(14.11,15.45,15.01,15.79,13.50,14.46,16.22,14.56,15.47,14.82)
+mwl_num_rmse$efsLR <- rbind(12.81,12.37,14.68,13.25,14.48,14.14,13.17,13.15,12.17,12.79)
+mwl_num_rmse$nasaREG <- rbind(14.359,13.186,13.065,14.651,12.595,14.756,12.115,13.121,13.023,13.017)
+mwl_num_rmse$wpREG <- rbind(14.865,14.747,14.863,15.388,14.731,14.978,14.921,14.021,14.835,14.808)
+mwl_num_rmse$efsREG <- rbind(15.174,12.882,14.320,14.652,14.919,14.670,14.314,14.968,15.255,13.422)
+mwl_num_rmse <- cbind(mwl_num_rmse$nasaLR, mwl_num_rmse$wpLR, mwl_num_rmse$efsLR, mwl_num_rmse$nasaREG, mwl_num_rmse$wpREG, mwl_num_rmse$efsREG)
+mwl_num_rmse <- as.data.frame(mwl_num_rmse)
+mwl_num_rmse$id <- c(1:10)
+mwl_num_rmse <- reshape::melt(mwl_num_rmse, id=c("id"))
+bartlett.test(mwl_num_rmse$value, mwl_num_rmse$variable)
+mwl_num_rmseAnova <- anova(lm(value ~ variable, data = mwl_num_rmse))
+mwl_num_rmseAnova
+ggplot(mwl_num_rmse, aes(x=variable, y=value, color=variable)) + geom_boxplot() +
+  labs(title="Boxplots RMSE of numeric value models", x="Numeric value models", y="RMSE") +
+  theme_classic()
+
+mwl_num_rsq <- NULL
+mwl_num_rsq$nasaLR <- rbind(0.18,0.26,0.31,0.23,0.27,0.31,0.29,0.33,0.41,0.13)
+mwl_num_rsq$wpLR <- rbind(0.37,0.17,0.18,0.23,0.36,0.22,0.12,0.24,0.19,0.24)
+mwl_num_rsq$efsLR <- rbind(0.48,0.44,0.25,0.33,0.37,0.18,0.35,0.36,0.5,0.43)
+mwl_num_rsq$nasaREG <- rbind(0.115,0.160,0.262,0.107,0.336,0.080,0.261,0.199,0.256,0.169)
+mwl_num_rsq$wpREG <- rbind(0.313,0.244,0.188,0.290,0.222,0.175,0.212,0.297,0.275,0.243)
+mwl_num_rsq$efsREG <- rbind(0.279,0.389,0.258,0.186,0.299,0.151,0.310,0.232,0.159,0.309)
+mwl_num_rsq <- cbind(mwl_num_rsq$nasaLR, mwl_num_rsq$wpLR, mwl_num_rsq$efsLR, mwl_num_rsq$nasaREG, mwl_num_rsq$wpREG, mwl_num_rsq$efsREG)
+mwl_num_rsq <- as.data.frame(mwl_num_rsq)
+mwl_num_rsq$id <- c(1:10)
+mwl_num_rsq <- reshape::melt(mwl_num_rsq, id=c("id"))
+bartlett.test(mwl_num_rsq$value, mwl_num_rsq$variable)
+mwl_num_rsqAnova <- anova(lm(value ~ variable, data = mwl_num_rsq))
+mwl_num_rsqAnova
+ggplot(mwl_num_rsq, aes(x=variable, y=value, color=variable)) + geom_boxplot() +
+  labs(title="Boxplots Rsquared of numeric value models", x="Numeric value models", y="Rsquared") +
+  theme_classic()
+
+mwl_cat_acc <- NULL
+mwl_cat_acc$nasaINFu <- rbind(0.56,0.53,0.52,0.54,0.54,0.52,0.55,0.54,0.53,0.52)
+mwl_cat_acc$nasaINFo1 <- rbind(0.57,0.60,0.58,0.58,0.54,0.56,0.57,0.56,0.54,0.58)
+mwl_cat_acc$nasaINFo2 <- rbind(0.68,0.65,0.63,0.64,0.67,0.66,0.61,0.66,0.63,0.64)
+mwl_cat_acc$nasaINFo <- rbind(0.33,0.57,0.50,0.60,0.60,0.50,0.53,0.50,0.50,0.50)
+mwl_cat_acc$wpINFu <- rbind(0.55,0.52,0.52,0.54,0.55,0.56,0.51,0.57,0.51,0.57)
+mwl_cat_acc$wpINFo1 <- rbind(0.58,0.63,0.56,0.57,0.56,0.59,0.57,0.54,0.56,0.59)
+mwl_cat_acc$wpINFo2 <- rbind(0.59,0.59,0.62,0.56,0.58,0.57,0.60,0.61,0.59,0.60)
+mwl_cat_acc$wpINFo <- rbind(0.50,0.50,0.50,0.50,0.50,0.50,0.50,0.50,0.50,0.50)
+mwl_cat_acc$efsINFu <- rbind(0.58,0.56,0.59,0.51,0.52,0.55,0.50,0.50,0.57,0.50)
+mwl_cat_acc$efsINFo1 <- rbind(0.57,0.56,0.58,0.61,0.59,0.57,0.60,0.60,0.56,0.60)
+mwl_cat_acc$efsINFo2 <- rbind(0.56,0.57,0.55,0.55,0.59,0.61,0.58,0.60,0.62,0.61)
+mwl_cat_acc$efsINFo <- rbind(0.50,0.55,0.60,0.55,0.50,0.50,0.60,0.58,0.60,0.50)
+mwl_cat_acc$nasaCLAu <- rbind(0.54,0.53,0.50,0.53,0.52,0.53,0.53,0.53,0.53,0.52)
+mwl_cat_acc$nasaCLAo1 <- rbind(0.59,0.58,0.62,0.61,0.50,0.52,0.58,0.57,0.57,0.58)
+mwl_cat_acc$nasaCLAo2 <- rbind(0.61,0.62,0.61,0.59,0.50,0.58,0.60,0.61,0.61,0.64)
+mwl_cat_acc$nasaCLAo <- rbind(0.60,0.56,0.50,0.50,0.51,0.52,0.53,0.50,0.50,0.50)
+mwl_cat_acc$wpCLAu <- rbind(0.56,0.52,0.54,0.55,0.54,0.50,0.53,0.52,0.52,0.55)
+mwl_cat_acc$wpCLAo1 <- rbind(0.61,0.64,0.60,0.62,0.58,0.56,0.56,0.57,0.60,0.61)
+mwl_cat_acc$wpCLAo2 <- rbind(0.57,0.56,0.57,0.50,0.57,0.63,0.55,0.61,0.57,0.57)
+mwl_cat_acc$wpCLAo <- rbind(0.50,0.52,0.50,0.50,0.50,0.50,0.50,0.50,0.50,0.50)
+mwl_cat_acc$efsCLAu <- rbind(0.56,0.61,0.59,0.56,0.58,0.56,0.59,0.58,0.56,0.55)
+mwl_cat_acc$efsCLAo1 <- rbind(0.58,0.52,0.50,0.50,0.58,0.50,0.50,0.54,0.50,0.55)
+mwl_cat_acc$efsCLAo2 <- rbind(0.50,0.61,0.62,0.61,0.50,0.63,0.61,0.65,0.63,0.57)
+mwl_cat_acc$efsCLAo <- rbind(0.53,0.54,0.55,0.50,0.50,0.56,0.53,0.55,0.56,0.50)
+mwl_cat_acc <- cbind(mwl_cat_acc$nasaINFu,mwl_cat_acc$nasaINFo1,mwl_cat_acc$nasaINFo2,mwl_cat_acc$nasaINFo, mwl_cat_acc$wpINFu,mwl_cat_acc$wpINFo1,mwl_cat_acc$wpINFo2,mwl_cat_acc$wpINFo, mwl_cat_acc$efsINFu,mwl_cat_acc$efsINFo1,mwl_cat_acc$efsINFo2,mwl_cat_acc$efsINFo, mwl_cat_acc$nasaCLAu,mwl_cat_acc$nasaCLAo1,mwl_cat_acc$nasaCLAo2,mwl_cat_acc$nasaCLAo, mwl_cat_acc$wpCLAu,mwl_cat_acc$wpCLAo1,mwl_cat_acc$wpCLAo2,mwl_cat_acc$wpCLAo, mwl_cat_acc$efsCLAu,mwl_cat_acc$efsCLAo1,mwl_cat_acc$efsCLAo2,mwl_cat_acc$efsCLAo)
+mwl_cat_acc <- as.data.frame(mwl_cat_acc)
+mwl_cat_acc$id <- c(1:10)
+mwl_cat_acc <- reshape::melt(mwl_cat_acc, id=c("id"))
+bartlett.test(mwl_cat_acc$value, mwl_cat_acc$variable)
+kruskal.test(mwl_cat_acc$value~mwl_cat_acc$variable)
+mwl_cat_accAnova <- anova(lm(value ~ variable, data = mwl_cat_acc))
+mwl_cat_accAnova
+ggplot(mwl_cat_acc, aes(x=variable, y=value, color=variable)) + geom_boxplot() +
+  labs(title="Boxplots Accuracy of classification models", x="Classification models", y="Accuracy") +
+  theme_classic()
+
+mwl_cat_pre <- NULL
+mwl_cat_pre$nasaINFu <- rbind(0.25,0.50,0.25,0.50,0.50,0.25,0.25,0.50,0.50,0.25)
+mwl_cat_pre$nasaINFo1 <- rbind(0.38,0.48,0.43,0.38,0.19,0.33,0.43,0.29,0.24,0.43)
+mwl_cat_pre$nasaINFo2 <- rbind(0.73,0.51,0.54,0.57,0.68,0.59,0.46,0.62,0.51,0.54)
+mwl_cat_pre$nasaINFo <- rbind(1,1,0,0,1,0,1,0,0,0)
+mwl_cat_pre$wpINFu <- rbind(0.67,0.17,0.17,0.33,0.5,0.67,0.17,0.5,0.17,0.5)
+mwl_cat_pre$wpINFo1 <- rbind(0.39,0.61,0.32,0.39,0.32,0.36,0.29,0.21,0.29,0.39)
+mwl_cat_pre$wpINFo2 <- rbind(0.39,0.43,0.57,0.29,0.39,0.32,0.46,0.57,0.43,0.50)
+mwl_cat_pre$wpINFo <- rbind(0,0,0,0,0,0,0,0,0,0)
+mwl_cat_pre$efsINFu <- rbind(0.57,0.43,0.71,0.14,0.14,0.43,0,0,0.43,0)
+mwl_cat_pre$efsINFo1 <- rbind(0.41,0.31,0.38,0.52,0.45,0.34,0.48,0.45,0.28,0.41)
+mwl_cat_pre$efsINFo2 <- rbind(0.33,0.38,0.29,0.25,0.54,0.54,0.5,0.46,0.67,0.63)
+mwl_cat_pre$efsINFo <- rbind(0,0.5,0.5,0.5,0 ,0,0.5,1,0.5,0)
+mwl_cat_pre$nasaCLAu <- rbind(0.25,0.13,0,0.13,0.08,0.14,0.14,0.12,0.09,0.09)
+mwl_cat_pre$nasaCLAo1 <- rbind(0.36,0.41,0.48,0.46,0 ,0.22,0.41,0.38,0.44,0.50)
+mwl_cat_pre$nasaCLAo2 <- rbind(0.75,0.80,0.73,0.75,0 ,0.62,0.78,0.73,0.86,0.69)
+mwl_cat_pre$nasaCLAo <- rbind(0.33,0.20,0,0,0.04,0.09,0.11,0,0,0)
+mwl_cat_pre$wpCLAu <- rbind(0.25,0.11,0.17,0.23,0.17,0,0.12,0.13,0.11,0.21)
+mwl_cat_pre$wpCLAo1 <- rbind(0.46,0.61,0.50,0.53,0.59,0.50,0.40,0.53,0.52,0.54)
+mwl_cat_pre$wpCLAo2 <- rbind(0.78,0.58,0.67,0 ,0.57,0.51,0.67,0.48,0.48,0.62)
+mwl_cat_pre$wpCLAo <- rbind(0,0.07,0,0,0,0,0,0,0,0)
+mwl_cat_pre$efsCLAu <- rbind(0.25,0.37,0.32,0.24,0.30,0.27,0.32,0.31,0.27,0.33)
+mwl_cat_pre$efsCLAo1 <- rbind(0.46,0.40,0 ,0 ,0.40,0 ,0 ,0.63,0 ,0.50)
+mwl_cat_pre$efsCLAo2 <- rbind(0 ,0.54,0.45,0.44,0 ,0.47,0.44,0.59,0.50,0.37)
+mwl_cat_pre$efsCLAo <- rbind(0.11,0.14,0.20,0,0,0.22,0.14,0.18,0.15,0)
+mwl_cat_pre <- cbind(mwl_cat_pre$nasaINFu,mwl_cat_pre$nasaINFo1,mwl_cat_pre$nasaINFo2,mwl_cat_pre$nasaINFo, mwl_cat_pre$wpINFu,mwl_cat_pre$wpINFo1,mwl_cat_pre$wpINFo2,mwl_cat_pre$wpINFo, mwl_cat_pre$efsINFu,mwl_cat_pre$efsINFo1,mwl_cat_pre$efsINFo2,mwl_cat_pre$efsINFo, mwl_cat_pre$nasaCLAu,mwl_cat_pre$nasaCLAo1,mwl_cat_pre$nasaCLAo2,mwl_cat_pre$nasaCLAo, mwl_cat_pre$wpCLAu,mwl_cat_pre$wpCLAo1,mwl_cat_pre$wpCLAo2,mwl_cat_pre$wpCLAo, mwl_cat_pre$efsCLAu,mwl_cat_pre$efsCLAo1,mwl_cat_pre$efsCLAo2,mwl_cat_pre$efsCLAo)
+mwl_cat_pre <- as.data.frame(mwl_cat_pre)
+mwl_cat_pre$id <- c(1:10)
+mwl_cat_pre <- reshape::melt(mwl_cat_pre, id=c("id"))
+bartlett.test(mwl_cat_pre$value, mwl_cat_pre$variable)
+kruskal.test(mwl_cat_pre$value~mwl_cat_pre$variable)
+mwl_cat_preAnova <- anova(lm(value ~ variable, data = mwl_cat_pre))
+mwl_cat_preAnova
+ggplot(mwl_cat_pre, aes(x=variable, y=value, color=variable)) + geom_boxplot() +
+  labs(title="Boxplots Precision of classification models", x="Classification models", y="Precision") +
+  theme_classic()
+
+mwl_cat_rec <- NULL
+mwl_cat_rec$nasaINFu <- rbind(0.50,0.125,0.11,0.167,0.18,0.09,0.33,0.15,0.12,0.11)
+mwl_cat_rec$nasaINFo1 <- rbind(0.44,0.50,0.45,0.50,0.36,0.41,0.38,0.43,0.28,0.47)
+mwl_cat_rec$nasaINFo2 <- rbind(0.66,0.83,0.61,0.64,0.66,0.71,0.61,0.68,0.70,0.67)
+mwl_cat_rec$nasaINFo <- rbind(0.50,0.25,0,0,0.33,0,0.13,0,0,0)
+mwl_cat_rec$wpINFu <- rbind(0.2,0.17,0.1,0.2,0.2,0.24,0.08,0.3,0.08,0.33)
+mwl_cat_rec$wpINFo1 <- rbind(0.5,0.55,0.43,0.39,0.41,0.63,0.44,0.38,0.42,0.58)
+mwl_cat_rec$wpINFo2 <- rbind(0.61,0.5,0.55,0.4,0.5,0.53,0.46,0.47,0.48,0.50)
+mwl_cat_rec$wpINFo <- rbind(0,0,0,0,0,0,0,0,0,0)
+mwl_cat_rec$efsINFu <- rbind(0.33,0.27,0.36,0.08,0.2,0.21,0,0,0.33,0)
+mwl_cat_rec$efsINFo1 <- rbind(0.4,0.39,0.48,0.54,0.5,0.48,0.54,0.54,0.44,0.6)
+mwl_cat_rec$efsINFo2 <- rbind(0.42,0.39,0.3,0.35,0.42,0.51,0.4,0.52,0.48,0.45)
+mwl_cat_rec$efsINFo <- rbind(0,0.2,0.5,0.2,0 ,0,0.5,0.29,0.5,0)
+mwl_cat_rec$nasaCLAu <- rbind(0.25,0.50,0,0.50,0.75,0.75,0.50,0.50,0.50,0.25)
+mwl_cat_rec$nasaCLAo1 <- rbind(0.62,0.43,0.67,0.62,0,0.10,0.43,0.38,0.38,0.38)
+mwl_cat_rec$nasaCLAo2 <- rbind(0.41, 0.43,0.43,0.32,0,0.35,0.38,0.43,0.49,0.54)
+mwl_cat_rec$nasaCLAo <- rbind(1,1,0,0,1,1,1,0,0,0)
+mwl_cat_rec$wpCLAu <- rbind(0.50,0.17,0.50,0.50,0.67,0,0.50,0.17,0.17,0.50)
+mwl_cat_rec$wpCLAo1 <- rbind(0.61,0.61,0.50,0.61,0.36,0.25,0.29,0.32,0.46,0.50)
+mwl_cat_rec$wpCLAo2 <- rbind(0.25,0.25,0.29,0,0.29,0.64,0.21,0.57,0.36,0.29)
+mwl_cat_rec$wpCLAo <- rbind(0,0.50,0,0,0,0,0,0,0,0)
+mwl_cat_rec$efsCLAu <- rbind(0.71,1,0.86,0.71,0.86,0.57,0.86,0.71,0.57,0.29)
+mwl_cat_rec$efsCLAo1 <- rbind(0.38,0.07,0,0,0.48,0,0,0.17,0,0.21)
+mwl_cat_rec$efsCLAo2 <- rbind(0,0.54,0.71,0.67,0,0.75,0.67,0.67,0.71,0.46)
+mwl_cat_rec$efsCLAo <- rbind(1,1,0.50,0,0,1,0.50,1,1,0)
+mwl_cat_rec <- cbind(mwl_cat_rec$nasaINFu,mwl_cat_rec$nasaINFo1,mwl_cat_rec$nasaINFo2,mwl_cat_rec$nasaINFo, mwl_cat_rec$wpINFu,mwl_cat_rec$wpINFo1,mwl_cat_rec$wpINFo2,mwl_cat_rec$wpINFo, mwl_cat_rec$efsINFu,mwl_cat_rec$efsINFo1,mwl_cat_rec$efsINFo2,mwl_cat_rec$efsINFo, mwl_cat_rec$nasaCLAu,mwl_cat_rec$nasaCLAo1,mwl_cat_rec$nasaCLAo2,mwl_cat_rec$nasaCLAo, mwl_cat_rec$wpCLAu,mwl_cat_rec$wpCLAo1,mwl_cat_rec$wpCLAo2,mwl_cat_rec$wpCLAo, mwl_cat_rec$efsCLAu,mwl_cat_rec$efsCLAo1,mwl_cat_rec$efsCLAo2,mwl_cat_rec$efsCLAo)
+mwl_cat_rec <- as.data.frame(mwl_cat_rec)
+mwl_cat_rec$id <- c(1:10)
+mwl_cat_rec <- reshape::melt(mwl_cat_rec, id=c("id"))
+bartlett.test(mwl_cat_rec$value, mwl_cat_rec$variable)
+kruskal.test(mwl_cat_rec$value~mwl_cat_rec$variable)
+mwl_cat_recAnova <- anova(lm(value ~ variable, data = mwl_cat_rec))
+mwl_cat_recAnova
+ggplot(mwl_cat_rec, aes(x=variable, y=value, color=variable)) + geom_boxplot() +
+  labs(title="Boxplots Recall of classification models", x="Classification models", y="Recall") +
+  theme_classic()
+
+## *visualisation
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col = rgb(.2, .2, .2, .4)
+theme1$plot.symbol$pch = 16
+theme1$plot.line$col = rgb(1, 0, 0, .7)
+theme1$plot.line$lwd <- 2
+trellis.par.set(theme1)
+bwplot(resamps1, layout = c(3, 1))
+bwplot(resamps2, metric = c("Accuracy","Mean_Precision","Mean_Recall"), layout = c(3, 1))
+## *difference by visualisation (scatter plot matrix)
+splom(resamps1)
+## *diffrence by value
+difValues1 <- diff(resamps1)
+difValues1
+summary(difValues1)
+
+difValues2 <- diff(resamps2)
+difValues2
+summary(difValues2)
+
+nasaTrain$mental_workload_recode <- as.factor(nasaTrain$mental_workload_recode)
+nasa_dt <- C5.0(nasaTrain, nasaTrain$mental_workload_recode)
+summary(nasa_dt)
+nasa_pred_dt <- predict(nasa_dt, nasaTest, type = "class")
+nasa_pred_dt <- as.numeric(nasa_pred_dt)
+nasa_auc <- multiclass.roc(nasaTest$mental_workload_recode, nasa_pred_dt, percent = T)
+print(nasa_auc)
+
+# Ensemble model (boosting trees)
+nasa_rf <- train(mental_workload_recode ~ ., data = nasaTrain, method = "rf", trControl = fitControl)
+
+```
+
+```{r measuring performance}
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
